@@ -6218,7 +6218,7 @@ document.getElementById('treasure-close').addEventListener('click',()=>{
 // Rewarded "double coins" — adds the base reward again (total ×2), then closes
 document.getElementById('btn-rewarded-double').addEventListener('click',()=>{
   if(_treasureDoubled)return;
-  CG.rewarded(()=>{
+  Reward.show(()=>{
     _treasureDoubled=true;
     addCoins(_treasureCoins); // base reward again → x2 total
     document.getElementById('btn-rewarded-double').style.display='none';
@@ -6317,7 +6317,7 @@ document.getElementById('gov-lobby').addEventListener('click',()=>{
 // Rewarded revive — restore 1 life and resume the run (once per game)
 document.getElementById('btn-rewarded-revive').addEventListener('click',()=>{
   if(_reviveUsed)return;
-  CG.rewarded(()=>{
+  Reward.show(()=>{
     // Reward granted: revive
     _reviveUsed=true;
     document.getElementById('btn-rewarded-revive').style.display='none';
@@ -6397,17 +6397,80 @@ function resumeGame(){
 document.addEventListener('visibilitychange',()=>{document.hidden?pauseGame():resumeGame();});
 
 /* ═══════════════════ TELEGRAM MINI APP (only acts inside Telegram) ═══════════════════ */
+// ▼▼▼ Paste your Adsgram block ID here to enable rewarded ads in Telegram (from adsgram.ai dashboard) ▼▼▼
+let ADSGRAM_BLOCK_ID = '';
+// ▲▲▲ leave empty until you have it — ads then gracefully do nothing ▲▲▲
+function inTelegram(){const tg=window.Telegram&&window.Telegram.WebApp;return !!(tg&&tg.platform&&tg.platform!=='unknown');}
 (function(){
   try{
-    const tg=window.Telegram&&window.Telegram.WebApp;
-    if(!tg||!tg.platform||tg.platform==='unknown')return; // not running inside Telegram → no-op
+    if(!inTelegram())return; // not running inside Telegram → no-op
+    const tg=window.Telegram.WebApp;
     tg.ready();
     tg.expand();                                  // use full viewport height
     try{tg.disableVerticalSwipes&&tg.disableVerticalSwipes();}catch(e){} // swipe in 3D world won't close the app
     try{tg.setHeaderColor&&tg.setHeaderColor('#0a0b10');tg.setBackgroundColor&&tg.setBackgroundColor('#0a0b10');}catch(e){}
     try{tg.requestFullscreen&&tg.requestFullscreen();}catch(e){} // Bot API 8.0+ true fullscreen
+    // Load Adsgram rewarded-ad SDK only inside Telegram (keeps the CrazyGames build clean)
+    if(ADSGRAM_BLOCK_ID && !window.__adsgramLoaded){
+      window.__adsgramLoaded=true;
+      const s=document.createElement('script');s.src='https://sad.adsgram.ai/js/sad.min.js';s.async=true;document.head.appendChild(s);
+    }
   }catch(e){}
 })();
+
+/* ═══════════════════ UNIFIED REWARDED ADS ═══════════════════ */
+// Telegram → Adsgram · CrazyGames → CG SDK · local → graceful no-op. Never hangs the UI.
+const Reward = (() => {
+  let _ctrl=null;
+  function adsgram(){
+    if(_ctrl)return _ctrl;
+    try{ if(window.Adsgram && ADSGRAM_BLOCK_ID) _ctrl=window.Adsgram.init({blockId:ADSGRAM_BLOCK_ID}); }catch(e){}
+    return _ctrl;
+  }
+  return {
+    // onReward() fires only on full ad completion; onSkip() on unavailable/closed/error
+    show(onReward,onSkip){
+      onReward=onReward||function(){}; onSkip=onSkip||function(){};
+      if(inTelegram()){
+        const ad=adsgram();
+        if(!ad){ onSkip(); return; }
+        pauseGame();
+        ad.show().then(()=>{ resumeGame(); onReward(); }).catch(()=>{ resumeGame(); onSkip(); });
+        return;
+      }
+      CG.rewarded(onReward,onSkip); // CrazyGames / local
+    }
+  };
+})();
+
+/* ═══════════════════ TELEGRAM STARS PURCHASES ═══════════════════ */
+// Set this to your hosted bot.py URL (e.g. 'https://your-bot.onrender.com') after deploying it.
+let BOT_API_BASE = '';
+// Apply the purchased item to the local save. Item ids must match CATALOG in bot.py.
+function grantStarsItem(grant){
+  if(!grant)return;
+  if(grant.indexOf('coins:')===0){ addCoins(parseInt(grant.split(':')[1],10)||0); }
+  else if(grant==='unlock_c1'){ S.c1Unlocked=true; PM.save(); }
+  else if(grant==='no_ads'){ S.noAds=true; PM.save(); }
+  toast('Purchase complete! 🎉','ts',2600);
+}
+// Call from a shop button, e.g. onclick="buyWithStars('coins_1000')"
+function buyWithStars(itemId){
+  if(!inTelegram()){ toast('Stars purchases work inside Telegram only','ti',2600); return; }
+  if(!BOT_API_BASE){ toast('Store not configured yet','te',2200); return; }
+  const tg=window.Telegram.WebApp;
+  fetch(BOT_API_BASE.replace(/\/$/,'')+'/create-invoice',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({item:itemId, initData:tg.initData})
+  }).then(r=>r.json()).then(d=>{
+    if(!d||!d.link){ toast('Store error','te',2200); return; }
+    tg.openInvoice(d.link, status=>{
+      const st=(status&&status.status)?status.status:status; // accept string or object
+      if(st==='paid') grantStarsItem(d.grant);
+    });
+  }).catch(()=>toast('Store error','te',2200));
+}
+window.buyWithStars=buyWithStars;
 
 /* ═══════════════════ BOOT ═══════════════════ */
 // Initialize the SDK first (required before any other SDK call), then boot the game.
